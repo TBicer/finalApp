@@ -1,31 +1,9 @@
 import UIKit
 import RxSwift
+import FirebaseAuth
+import FirebaseFirestore
 
-enum HomeSection{
-    case deals([Product])
-    case recommend([Product])
-    
-    var items: [Product]{
-        switch self{
-        case .deals(let items),
-                .recommend(let items):
-            return items
-        }
-    }
-    
-    var count: Int {
-        return items.count
-    }
-    
-    var title:String {
-        switch self {
-        case .deals: return "Günün Ürünleri"
-        case .recommend: return "Tavsiye Edilen Ürünler"
-        }
-    }
-}
-
-class Welcome: UIViewController {
+class WelcomePage: UIViewController {
     @IBOutlet weak var homeCollectionView: UICollectionView!
     
     
@@ -34,9 +12,7 @@ class Welcome: UIViewController {
     var dealSliderList = [Product]()
     var recommendList = [Product]()
     var sections: [HomeSection] = []
-    var timer: Timer? // Timer değişkeni
-    
-    
+
     
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -44,6 +20,8 @@ class Welcome: UIViewController {
         homeCollectionView.dataSource = self
         homeCollectionView.delegate = self
         homeCollectionView.collectionViewLayout = createLayout()
+        
+        handleUsernamePrint()
         
         _ = viewModel.dealSliderList
             .subscribe(onNext: { [weak self] deals in
@@ -56,6 +34,24 @@ class Welcome: UIViewController {
                 self?.recommendList = deals
                 self?.updateSections()
             })
+        
+    }
+    
+    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+        
+        handleUsernamePrint()
+        DispatchQueue.main.async {
+            self.homeCollectionView.reloadData()
+        }
+    }
+    
+    func handleUsernamePrint(){
+        if let username = Auth.auth().currentUser?.displayName {
+            navigationItem.title = "Hoşgeldin, \(username)"
+        } else {
+            navigationItem.title = "Hoşgeldin"
+        }
     }
     
     override func prepare(for segue: UIStoryboardSegue, sender: Any?) {
@@ -93,7 +89,7 @@ class Welcome: UIViewController {
                 
                 let section = NSCollectionLayoutSection(group: group)
                 section.interGroupSpacing = 10
-                section.orthogonalScrollingBehavior = .continuous
+                section.orthogonalScrollingBehavior = .groupPagingCentered
                 section.boundarySupplementaryItems = [supplementaryHeaderItem()]
                 section.contentInsets = .init(top: 0, leading: 0, bottom: 20, trailing: 0)
                 
@@ -124,13 +120,24 @@ class Welcome: UIViewController {
     
 }
 
-extension Welcome: UICollectionViewDelegate, UICollectionViewDataSource, ProductCellProtocol {
-    func didTapFavButton() {
-        print("fav tıklandı")
+extension WelcomePage: UICollectionViewDelegate, UICollectionViewDataSource, ProductCellProtocol {
+    func updateFavoriteList(productId: Int) {
+        viewModel.updateFavoriteList(productId: productId) { [weak self] success in
+            guard let self = self else {return}
+            if success {
+                print("Favori listesi başarıyla güncellendi.")
+                DispatchQueue.main.async{
+                    self.homeCollectionView.reloadData()
+                }
+            } else {
+                print("Favori listesi güncellenirken hata oluştu.")
+            }
+        }
     }
     
-    func didTapAddToCart(ad: String, resim: String, kategori: String, fiyat: Int, marka: String) {
-        viewModel.addToCart(ad: ad, resim: resim, kategori: kategori, fiyat: fiyat, marka: marka, siparisAdeti: 1)
+    func didTapAddToCart(id:Int, ad: String, resim: String, kategori: String, fiyat: Int, marka: String) {
+        viewModel.addToCart(productId: id,ad: ad, resim: resim, kategori: kategori, fiyat: fiyat, marka: marka, siparisAdeti: 1)
+        ShowAlertHelper.shared.showAlert(on: self, title: "Sepete Eklendi", message: "\(ad) sepetinize eklendi!")
     }
     
     func numberOfSections(in collectionView: UICollectionView) -> Int {
@@ -147,38 +154,56 @@ extension Welcome: UICollectionViewDelegate, UICollectionViewDataSource, Product
             let cell = collectionView.dequeueReusableCell(withReuseIdentifier: "dealsCell", for: indexPath) as! DealsCell
             let item = items[indexPath.row]
             
+            let fiyat = ProductCellFormatter.shared.formatCurrency(value: item.fiyat!)
+            
+            cell.productId = item.id
             cell.productBrandLabel.text = item.marka
-            cell.productPriceLabel.text = "\(item.fiyat!)₺"
+            cell.productPriceLabel.text = fiyat
             cell.productTitleLabel.text = item.ad
-            viewModel.fetchImage(imageUrl: "http://kasimadalan.pe.hu/urunler/resimler/", imageName: item.resim!, imageView: cell.productImageView)
+            cell.productCellProtocol = self
+            ProductCellFormatter.shared.fetchImage(imageUrl: Constants.shared.imagePathURL, imageName: item.resim!, imageView: cell.productImageView)
+            
+            viewModel.checkIfFavorite(productId: item.id!) { isFavorite in
+                DispatchQueue.main.async{
+                    cell.configureCell(isFavorite: isFavorite)
+                }
+            }
             
             return cell
         case .recommend(let items):
             let cell = collectionView.dequeueReusableCell(withReuseIdentifier: "recListCell", for: indexPath) as! RecListCell
             let item = items[indexPath.row]
             
-            let formattedTotal = self.viewModel.formatCurrency(value: item.fiyat!)
+            let fiyat = ProductCellFormatter.shared.formatCurrency(value: item.fiyat!)
             
             cell.product = item
-            cell.productPriceLabel.text = formattedTotal
+            cell.productPriceLabel.text = fiyat
             cell.productTitleLabel.text = item.ad
             cell.productBrandLabel.text = item.marka
             cell.productCellProtocol = self
-            viewModel.fetchImage(imageUrl: "http://kasimadalan.pe.hu/urunler/resimler/", imageName: item.resim!, imageView: cell.productImageView)
+            ProductCellFormatter.shared.fetchImage(imageUrl: Constants.shared.imagePathURL, imageName: item.resim!, imageView: cell.productImageView)
+            
+            viewModel.checkIfFavorite(productId: item.id!) { isFavorite in
+                DispatchQueue.main.async{
+                    cell.configureCell(isFavorite: isFavorite)
+                }
+            }
             
             return cell
         }
     }
+    
     func collectionView(_ collectionView: UICollectionView, viewForSupplementaryElementOfKind kind: String, at indexPath: IndexPath) -> UICollectionReusableView {
         switch kind {
         case UICollectionView.elementKindSectionHeader:
-            let header = collectionView.dequeueReusableSupplementaryView(ofKind: kind, withReuseIdentifier: "reusableTitleCell", for: indexPath) as! HomeReusableTitleCell
+            let header = collectionView.dequeueReusableSupplementaryView(ofKind: kind, withReuseIdentifier: "homeReusableTitleCell", for: indexPath) as! HomeReusableTitleCell
             header.setup(sections[indexPath.section].title)
             return header
         default:
             return UICollectionReusableView()
         }
     }
+    
     func collectionView(_ collectionView: UICollectionView, didSelectItemAt indexPath: IndexPath) {
         var product:Product?
         

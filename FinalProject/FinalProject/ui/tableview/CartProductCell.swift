@@ -1,9 +1,6 @@
 import UIKit
 
-protocol CartProductCellProtocol {
-    func didTapDeleteButton(sepetId: Int)
-    func updateProductInCart(ad: String, resim: String, kategori: String, fiyat: Int, marka: String, siparisAdeti: Int)
-}
+
 
 class CartProductCell: UITableViewCell {
     @IBOutlet weak var productImageView: UIImageView!
@@ -14,9 +11,8 @@ class CartProductCell: UITableViewCell {
     @IBOutlet weak var minusButton: UIButton!
     
     var cartCellProtocol : CartProductCellProtocol?
-    var sepetId:Int?
     var image:String?
-    var item:CartItem?
+    var item:ProductFirebase?
     
     var quantity: Int? {
         didSet {
@@ -46,7 +42,7 @@ class CartProductCell: UITableViewCell {
                 quantity = q
                 productQuantityLabel.text = String(q)
                 updateMinusButtonAppearance()
-                updateCart(with: q) // Güncellenmiş miktarı API'ye gönder
+                updateCart(with: -1) // Güncellenmiş miktarı API'ye gönder
             }
             
         case 1: // Artı butonu
@@ -54,7 +50,7 @@ class CartProductCell: UITableViewCell {
             quantity = q
             productQuantityLabel.text = String(q)
             updateMinusButtonAppearance()
-            updateCart(with: q) // Güncellenmiş miktarı API'ye gönder
+            updateCart(with: 1) // Güncellenmiş miktarı API'ye gönder
             
         default:
             print("Bilinmeyen butona tıklandı")
@@ -64,13 +60,14 @@ class CartProductCell: UITableViewCell {
     func updateCart(with quantity: Int) {
         guard let cartCellProtocol = self.cartCellProtocol, let item = item else { return }
         
+        let productId = item.productId
         let ad = item.ad
         let resim = item.resim
         let kategori = item.kategori
         let fiyat = item.fiyat
         let marka = item.marka
         
-        cartCellProtocol.updateProductInCart(ad: ad!, resim: resim!, kategori: kategori!, fiyat: fiyat!, marka: marka!, siparisAdeti: quantity)
+        cartCellProtocol.updateProductInCart(productId: productId!, ad: ad!, resim: resim!, kategori: kategori!, fiyat: fiyat!, marka: marka!, siparisAdeti: quantity)
     }
     
     func updateMinusButtonAppearance() {
@@ -86,8 +83,8 @@ class CartProductCell: UITableViewCell {
     }
     
     @IBAction func handleDelete(_ sender: Any) {
-        if let sepetId = item?.sepetId {
-            cartCellProtocol?.didTapDeleteButton(sepetId: sepetId)
+        if let productId = item?.productId{
+            cartCellProtocol?.didTapDeleteButton(sepetId: productId)
         }
     }
 }

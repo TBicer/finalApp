@@ -1,8 +1,9 @@
 import Foundation
 import RxSwift
 import UIKit
-import Kingfisher
 import Alamofire
+import FirebaseAuth
+import FirebaseFirestore
 
 class ProductRepository {
     private let disposeBag = DisposeBag()
@@ -11,17 +12,229 @@ class ProductRepository {
     var originalCategoryList: [ProductCategory] = []
     var filteredProductList = BehaviorSubject<[Product]>(value: [Product]())
     var orgFilteredProducts: [Product] = []
-    var cartProducts = BehaviorSubject<[CartItem]>(value: [CartItem]())
     var dealSliderList = BehaviorSubject<[Product]>(value: [])
     var recommendList = BehaviorSubject<[Product]>(value: [])
+    var favoriteList = BehaviorSubject<[Product]>(value: [])
     
     init(){
         fetchProducts()
     }
     
-    func addToFavList(product:Product){
+    func fetchFavoriteIds(completion: @escaping ([Int]) -> Void) {
+        let db = Firestore.firestore()
+        let userDocRef = db.collection("users").document(Auth.auth().currentUser?.uid ?? "anonymous")
         
+        userDocRef.getDocument { document, error in
+            if let document = document, document.exists {
+                // Kullanıcı oturumu açıksa
+                let favList = document.data()?["favList"] as? [String] ?? []
+                let favoriteIds = favList.compactMap { Int($0) }
+                completion(favoriteIds)
+            } else {
+                // Kullanıcı oturumu kapalıysa, anonim kullanıcının favori listesini kontrol et
+                let anonymousDocRef = db.collection("anonymous").document("anonymous")
+                
+                anonymousDocRef.getDocument { document, error in
+                    if let document = document, document.exists {
+                        let favList = document.data()?["favList"] as? [String] ?? []
+                        let favoriteIds = favList.compactMap { Int($0) }
+                        completion(favoriteIds)
+                    } else {
+                        print("Anonymous kullanıcı belgesi bulunamadı veya hata oluştu.")
+                        completion([])
+                    }
+                }
+            }
+        }
     }
+    
+    // Ürünleri URL'den çekip favori olanları bulma
+    func fetchFavoriteProducts() {
+        let url = Constants.shared.fetchProductsURL
+        
+        fetchFavoriteIds { [weak self] favoriteIds in
+            guard let self = self else {return}
+            
+            var favList = [Product]()
+            
+            AF.request(url,method: .get).response{ response in
+                if let data = response.data {
+                    do{
+                        let rs = try JSONDecoder().decode(ProductResponse.self, from: data)
+                        if let list = rs.urunler {
+                            for id in favoriteIds {
+                                let newList = list.filter({$0.id == id})
+                                favList.append(contentsOf: newList)
+                            }
+                            
+                            DispatchQueue.main.async {
+                                self.favoriteList.onNext(favList)
+                            }
+                        }
+                    }catch {
+                        print("Fav Listesi Çekerken Hata: \(error.localizedDescription)")
+                    }
+                }
+            }
+        }
+    }
+    
+    
+    
+    // Favori kontrolü için genel bir fonksiyon
+    func checkIfFavorite(productId: Int, completion: @escaping (Bool) -> Void) {
+        let db = Firestore.firestore()
+        
+        if let currentUser = Auth.auth().currentUser {
+            // Kullanıcının favori listesini al
+            let userDocRef = db.collection("users").document(currentUser.uid)
+            userDocRef.getDocument { document, error in
+                if let document = document, document.exists,
+                   let favList = document.data()?["favList"] as? [String] {
+                    let productIdString = String(productId)
+                    let isFavorite = favList.contains(productIdString)
+                    completion(isFavorite)
+                } else {
+                    completion(false) // Favori listesi yoksa
+                }
+            }
+        } else {
+            // Kullanıcı oturumu kapalıysa anonymous koleksiyonuna bak
+            let anonymousDocRef = db.collection("anonymous").document("anonymous")
+            anonymousDocRef.getDocument { document, error in
+                if let document = document, document.exists,
+                   let favList = document.data()?["favList"] as? [String] {
+                    let productIdString = String(productId)
+                    let isFavorite = favList.contains(productIdString)
+                    completion(isFavorite)
+                } else {
+                    completion(false) // Favori listesi yoksa
+                }
+            }
+        }
+    }
+    
+    func updateFavoriteList(productId: Int, completion: @escaping (Bool) -> Void) {
+        let db = Firestore.firestore()
+        
+        // currentUser nil mi kontrol et
+        guard let currentUser = Auth.auth().currentUser else {
+            print("Kullanıcı oturumu açık değil, anonim kullanıcıya geçiliyor...")
+            // Kullanıcı oturumu kapalıysa anonim kullanıcı işlemleri
+            let anonymousDocRef = db.collection("anonymous").document("anonymous")
+            
+            anonymousDocRef.getDocument { (document, error) in
+                if let document = document, document.exists {
+                    var favList = document.data()?["favList"] as? [String] ?? []
+                    
+                    let productIdString = String(productId)
+                    
+                    if let index = favList.firstIndex(of: productIdString) {
+                        favList.remove(at: index)
+                        anonymousDocRef.updateData(["favList": favList]) { error in
+                            if let error = error {
+                                print("Anonymous favori listesi güncellenirken hata oluştu: \(error.localizedDescription)")
+                                completion(false)
+                            } else {
+                                print("Anonymous favori listesi başarıyla güncellendi, ürün silindi.")
+                                completion(true)
+                                self.fetchFavoriteProducts()
+                            }
+                        }
+                    } else {
+                        favList.append(productIdString)
+                        anonymousDocRef.updateData(["favList": favList]) { error in
+                            if let error = error {
+                                print("Anonymous favori listesi güncellenirken hata oluştu: \(error.localizedDescription)")
+                                completion(false)
+                            } else {
+                                print("Anonymous favori listesi başarıyla güncellendi, ürün eklendi.")
+                                completion(true)
+                                self.fetchFavoriteProducts()
+                            }
+                        }
+                    }
+                } else {
+                    let productIdString = String(productId)
+                    anonymousDocRef.setData(["favList": [productIdString]]) { error in
+                        if let error = error {
+                            print("Anonymous favori listesi oluşturulurken hata oluştu: \(error.localizedDescription)")
+                            completion(false)
+                        } else {
+                            print("Anonymous favori listesi başarıyla oluşturuldu.")
+                            completion(true)
+                            self.fetchFavoriteProducts()
+                        }
+                    }
+                }
+            }
+            return
+        }
+        
+        // Kullanıcı oturumu açıksa devam et
+        let userDocRef = db.collection("users").document(currentUser.uid)
+        
+        userDocRef.getDocument { (document, error) in
+            if let document = document, document.exists {
+                var favList = document.data()?["favList"] as? [String] ?? []
+                
+                let productIdString = String(productId)
+                
+                if let index = favList.firstIndex(of: productIdString) {
+                    favList.remove(at: index)
+                    userDocRef.updateData(["favList": favList]) { error in
+                        if let error = error {
+                            print("Favori listesi güncellenirken hata oluştu: \(error.localizedDescription)")
+                            completion(false)
+                        } else {
+                            print("Favori listesi başarıyla güncellendi, ürün silindi.")
+                            completion(true)
+                        }
+                    }
+                } else {
+                    favList.append(productIdString)
+                    userDocRef.updateData(["favList": favList]) { error in
+                        if let error = error {
+                            print("Favori listesi güncellenirken hata oluştu: \(error.localizedDescription)")
+                            completion(false)
+                        } else {
+                            print("Favori listesi başarıyla güncellendi, ürün eklendi.")
+                            completion(true)
+                        }
+                    }
+                }
+            } else {
+                print("Kullanıcı belgesi bulunamadı veya hata oluştu. updatefavlist")
+                completion(false)
+            }
+        }
+    }
+    
+    // Helper'a taşındı
+    func showAlert(on viewController: UIViewController,title: String, message: String) {
+        let alertController = UIAlertController(title: title, message: message, preferredStyle: .alert)
+        let actionCancel = UIAlertAction(title: "Devam Et", style: .cancel)
+        alertController.addAction(actionCancel)
+        
+        viewController.present(alertController, animated: true)
+    }
+    // Helper'a taşındı
+    func showDeleteAlert(on viewController: UIViewController, title: String, message: String, yesAction: @escaping () -> Void) {
+        
+        let alertController = UIAlertController(title: title, message: message, preferredStyle: .actionSheet)
+        
+        let actionYes = UIAlertAction(title: "Evet", style: .destructive) { _ in
+            yesAction()
+        }
+        
+        let actionNo = UIAlertAction(title: "Hayır", style: .cancel, handler: nil)
+        
+        alertController.addAction(actionYes)
+        alertController.addAction(actionNo)
+        
+        viewController.present(alertController, animated: true)
+    }
+    
     
     func searchCategory(searchText: String) {
         if searchText.isEmpty {
@@ -55,19 +268,9 @@ class ProductRepository {
         
         return "\(value) ₺" // format edilmezse
     }
-
-    
-    // Kingfisher'ı her yerde kullanmak için fonksiyon
-    func fetchImage(imageUrl:String, imageName:String, imageView:UIImageView){
-        if let url = URL(string: "\(imageUrl)\(imageName)") {
-            DispatchQueue.main.async {
-                imageView.kf.setImage(with: url)
-            }
-        }
-    }
     
     func setRandomDeals(count:Int,completion: @escaping ([Product]) -> Void) {
-        let url = "http://kasimadalan.pe.hu/urunler/tumUrunleriGetir.php"
+        let url = Constants.shared.fetchProductsURL
         
         AF.request(url, method: .get).response { response in
             if let data = response.data {
@@ -112,9 +315,9 @@ class ProductRepository {
         // Ürünleri karıştır ve ilk 'count' kadarını al
         return products.shuffled().prefix(count).map { $0 }
     }
-     
+    
     func fetchProducts() {
-        let url = "http://kasimadalan.pe.hu/urunler/tumUrunleriGetir.php"
+        let url = Constants.shared.fetchProductsURL
         
         var newCatList = Set<ProductCategory>()
         
@@ -152,8 +355,8 @@ class ProductRepository {
     }
     
     func fetchCategoryProducts(for category: ProductCategory) {
-        let url = "http://kasimadalan.pe.hu/urunler/tumUrunleriGetir.php"
-
+        let url = Constants.shared.fetchProductsURL
+        
         AF.request(url, method: .get).response { response in
             if let data = response.data {
                 do {
@@ -168,7 +371,7 @@ class ProductRepository {
                                 filteredProductList.append(product)
                             }
                         }
-
+                        
                         // Filtrelenmiş ürünleri BehaviorSubject'e gönderiyoruz
                         DispatchQueue.main.async {
                             self.orgFilteredProducts = filteredProductList
@@ -183,216 +386,4 @@ class ProductRepository {
             }
         }
     }
-    
-    func fetchCartProducts(completion: @escaping () -> Void) { // Diğer fonksiyonlarımda kullandığım için bir completion parametresi koydum. Böylece diğer kodlar bu bitmeden çalışmıyor.
-        let url = "http://kasimadalan.pe.hu/urunler/sepettekiUrunleriGetir.php"
-        let params: Parameters = ["kullaniciAdi": "tbicer"]
-        
-        AF.request(url, method: .post, parameters: params).response { response in
-            if let data = response.data {
-                do {
-                    let rs = try JSONDecoder().decode(CartResponse.self, from: data)
-                    
-                    if let urunler = rs.urunler_sepeti {
-                        var newCartItems: [CartItem] = []
-                        
-                        newCartItems = urunler.compactMap { urun -> CartItem? in
-                            guard let ad = urun.ad,
-                                  let resim = urun.resim,
-                                  let kategori = urun.kategori,
-                                  let fiyat = urun.fiyat,
-                                  let marka = urun.marka,
-                                  let siparisAdeti = urun.siparisAdeti,
-                                  let kullaniciAdi = urun.kullaniciAdi else {
-                                return nil // Guard Let ile nil kontrolü yapıyoruz.
-                            }
-                            
-                            return CartItem(
-                                sepetId: urun.sepetId,
-                                ad: ad,
-                                resim: resim,
-                                kategori: kategori,
-                                fiyat: fiyat,
-                                marka: marka,
-                                siparisAdeti: siparisAdeti,
-                                kullaniciAdi: kullaniciAdi
-                            )
-                        }
-                        
-                        newCartItems.sort(by: {$0.fiyat! > $1.fiyat!})
-                        
-                        // Yeni ürünleri BehaviorSubject'e yollar
-                        DispatchQueue.main.async {
-                            self.cartProducts.onNext(newCartItems)
-                            completion() // Geri çağırmayı burada çağırıyoruz
-                        }
-                    }
-                    
-                } catch {
-                    // Eğer ürün yoksa boş dizi gönder
-                    DispatchQueue.main.async {
-                        self.cartProducts.onNext([])
-                        completion() // Geri çağırmayı burada çağırıyoruz
-                    }
-                }
-            } else if let error = response.error {
-                print("Request error: \(error.localizedDescription)")
-            }
-        }
-    }
-    
-    func addToCart(ad: String, resim: String, kategori: String, fiyat: Int, marka: String, siparisAdeti: Int) {
-        let url = "http://kasimadalan.pe.hu/urunler/sepeteUrunEkle.php"
-        
-        // Mevcut sepeti güncelle
-        fetchCartProducts {
-            // cartProducts güncellendikten sonra çalışacak
-            self.cartProducts
-                .take(1) // Sadece bir kez dinle
-                .subscribe(onNext: { cartItems in
-                    // Sepette ürün olup olmadığını kontrol et
-                    if let existingCartItem = cartItems.first(where: { $0.ad == ad && $0.kategori == kategori }) {
-                        print("Mevcut sepet ürünü bulundu: \(existingCartItem)") // Mevcut ürün
-                        let newOrderAmount = (existingCartItem.siparisAdeti ?? 0) + siparisAdeti // Yeni sipariş adedini hesapla
-                        
-                        // Sepetteki mevcut ürünü sil
-                        self.deleteProductFromCart(sepetId: existingCartItem.sepetId)
-                        
-                        // Güncellenmiş sipariş adedini parametreye yaz
-                        let params: Parameters = [
-                            "kullaniciAdi": "tbicer",
-                            "ad": ad,
-                            "resim": resim,
-                            "kategori": kategori,
-                            "fiyat": fiyat,
-                            "marka": marka,
-                            "siparisAdeti": newOrderAmount
-                        ]
-                        
-                        // Yeni ürünü sepete ekle
-                        AF.request(url, method: .post, parameters: params).response { response in
-                            if let data = response.data {
-                                do {
-                                    let rs = try JSONDecoder().decode(CRUDResponse.self, from: data)
-                                    if rs.success != nil {
-                                        print("Ürün sepete başarıyla eklendi.")
-                                        self.fetchCartProducts() {} // Sepeti tekrar güncelle
-                                    } else {
-                                        print("Sepete ekleme başarısız.")
-                                    }
-                                } catch {
-                                    print("Sepete eklerken bir hata oluştu: \(error.localizedDescription)")
-                                }
-                            }
-                        }
-                    } else {
-                        // Ürün sepette yoksa, direkt ekle
-                        let params: Parameters = [
-                            "kullaniciAdi": "tbicer",
-                            "ad": ad,
-                            "resim": resim,
-                            "kategori": kategori,
-                            "fiyat": fiyat,
-                            "marka": marka,
-                            "siparisAdeti": siparisAdeti
-                        ]
-                        
-                        AF.request(url, method: .post, parameters: params).response { response in
-                            if let data = response.data {
-                                do {
-                                    let rs = try JSONDecoder().decode(CRUDResponse.self, from: data)
-                                    if rs.success != nil {
-                                        print("Ürün sepete başarıyla eklendi.")
-                                        self.fetchCartProducts() {} // Sepeti tekrar güncelle
-                                    } else {
-                                        print("Sepete ekleme başarısız.")
-                                    }
-                                } catch {
-                                    print("Sepete eklerken bir hata oluştu: \(error.localizedDescription)")
-                                }
-                            }
-                        }
-                    }
-                }).disposed(by: self.disposeBag)
-        }
-    }
-    
-    func updateProductInCart(ad: String, resim: String, kategori: String, fiyat: Int, marka: String, siparisAdeti: Int) {
-        let url = "http://kasimadalan.pe.hu/urunler/sepeteUrunEkle.php"
-        
-        // Mevcut sepeti güncelle
-        fetchCartProducts {
-            // cartProducts güncellendikten sonra çalışacak
-            self.cartProducts.subscribe(onNext: { cartItems in
-                // Sepette ürün olup olmadığını kontrol et
-                if let existingCartItem = cartItems.first(where: { $0.ad == ad && $0.kategori == kategori }) {
-                    print("Mevcut sepet ürünü bulundu: \(existingCartItem)") // Mevcut ürün
-                    
-                    // Sepetteki mevcut ürünü sil
-                    self.deleteProductFromCart(sepetId: existingCartItem.sepetId)
-                    
-                    // Güncellenmiş sipariş adedini parametreye yaz
-                    let params: Parameters = [
-                        "kullaniciAdi": "tbicer",
-                        "ad": ad,
-                        "resim": resim,
-                        "kategori": kategori,
-                        "fiyat": fiyat,
-                        "marka": marka,
-                        "siparisAdeti": siparisAdeti // Yeni sipariş adedini gönder
-                    ]
-                    
-                    // Ürünü sepete ekle
-                    AF.request(url, method: .post, parameters: params).response { response in
-                        if let data = response.data {
-                            do {
-                                let rs = try JSONDecoder().decode(CRUDResponse.self, from: data)
-                                if rs.success != nil {
-                                    print("Ürün sepete başarıyla eklendi.")
-                                    self.fetchCartProducts() {} // Sepeti tekrar güncelle
-                                } else {
-                                    print("Sepete ekleme başarısız.")
-                                }
-                            } catch {
-                                print("Sepete eklerken bir hata oluştu: \(error.localizedDescription)")
-                            }
-                        }
-                    }
-                } else {
-                    print("Sepette ürün bulunamadı.")
-                }
-            }).disposed(by: DisposeBag())
-        }
-    }
-
-    func deleteProductFromCart(sepetId:Int){
-        let url = "http://kasimadalan.pe.hu/urunler/sepettenUrunSil.php"
-        let params: Parameters = ["sepetId":sepetId,"kullaniciAdi":"tbicer"]
-        
-        AF.request(url,method: .post,parameters: params).response { response in
-            if let data = response.data {
-                do{
-                    let rs = try JSONDecoder().decode(CRUDResponse.self, from: data)
-                    if (rs.success != nil) {
-                        print("\(sepetId) id'li ürün silindi")
-                        self.fetchCartProducts {}
-                    }
-                    
-                }catch{
-                    print(error.localizedDescription)
-                }
-            }
-        }
-    }
-    
-    func deleteAllProductsFromCart(completion: @escaping () -> Void){
-        fetchCartProducts(){
-            self.cartProducts.subscribe(onNext: {cartItems in
-                for item in cartItems {
-                    self.deleteProductFromCart(sepetId: item.sepetId)
-                }
-                self.fetchCartProducts() {}
-            }).disposed(by: DisposeBag())
-        }
-    } 
 }

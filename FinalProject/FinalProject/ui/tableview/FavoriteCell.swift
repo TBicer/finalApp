@@ -12,6 +12,10 @@ class FavoriteCell: UITableViewCell {
     @IBOutlet weak var productBrandLabel: UILabel!
     @IBOutlet weak var productTitleLabel: UILabel!
     @IBOutlet weak var productPriceLabel: UILabel!
+    @IBOutlet weak var favButton: UIButton!
+    
+    var product:Product?
+    var productCellProtocol:ProductCellProtocol?
     
     override func awakeFromNib() {
         super.awakeFromNib()
@@ -24,10 +28,20 @@ class FavoriteCell: UITableViewCell {
         // Configure the view for the selected state
     }
     
-    @IBAction func handleAddToFav(_ sender: UIButton) {
+    func configureCell(isFavorite: Bool) {
+        ButtonImageConfigurator.shared.configureHeartButton(favButton, isFavorite: isFavorite)
+    }
+    
+    @IBAction func handleAddToFav(_ sender: Any) {
+        if let id = product?.id {
+            productCellProtocol?.updateFavoriteList(productId: id)
+        }
     }
     
     @IBAction func handleAddToCart(_ sender: Any) {
+        if let p = product {
+            productCellProtocol?.didTapAddToCart(id:p.id! ,ad: p.ad!, resim: p.resim!, kategori: p.kategori!, fiyat: p.fiyat!, marka: p.marka!)
+        }
     }
     
 }

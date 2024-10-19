@@ -17,7 +17,7 @@ class ProductListPage: UIViewController {
         productCollectionView.dataSource = self
         productCollectionView.delegate = self
         designCells()
-        
+                
         if let c = category {
             navigationItem.title = c.title
             viewModel.fetchCategoryProducts(category: c)
@@ -43,6 +43,13 @@ class ProductListPage: UIViewController {
                 self.productCollectionView.reloadData()
             }
         })
+    }
+    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+        
+        DispatchQueue.main.async {
+            self.productCollectionView.reloadData()
+        }
     }
     
     func designCells(){
@@ -74,14 +81,12 @@ class ProductListPage: UIViewController {
     
     override func prepare(for segue: UIStoryboardSegue, sender: Any?) {
         if segue.identifier == "listToDetail" {
-            if let pro = sender as? Product {
+            if let p = sender as? Product {
                 let targetVC = segue.destination as! ProductDetailPage
-                targetVC.product = pro
+                targetVC.product = p
             }
         }
     }
-    
-
 }
 
 extension ProductListPage : UISearchBarDelegate {
@@ -98,12 +103,22 @@ extension ProductListPage : UISearchBarDelegate {
 }
 
 extension ProductListPage : UICollectionViewDelegate, UICollectionViewDataSource, ProductCellProtocol {
-    func didTapFavButton() {
-        print("fav tıklandı")
+    func updateFavoriteList(productId: Int) {
+        viewModel.updateFavoriteList(productId: productId) { success in
+            if success {
+                print("Favori listesi başarıyla güncellendi.")
+                DispatchQueue.main.async{
+                    self.productCollectionView.reloadData()
+                }
+            } else {
+                print("Favori listesi güncellenirken hata oluştu.")
+            }
+        }
     }
     
-    func didTapAddToCart(ad: String, resim: String, kategori: String, fiyat: Int, marka: String) {
-        viewModel.addToCart(ad: ad, resim: resim, kategori: kategori, fiyat: fiyat, marka: marka, siparisAdeti: 1)
+    func didTapAddToCart(id:Int, ad: String, resim: String, kategori: String, fiyat: Int, marka: String) {
+        viewModel.addToCart(productId: id, ad: ad, resim: resim, kategori: kategori, fiyat: fiyat, marka: marka, siparisAdeti: 1)
+        viewModel.showAlert(on: self, title: "Sepete Eklendi", message: "\(ad) adlı ürün başarıyla sepete eklendi!")
     }
     
     func collectionView(_ collectionView: UICollectionView, numberOfItemsInSection section: Int) -> Int {
@@ -114,14 +129,20 @@ extension ProductListPage : UICollectionViewDelegate, UICollectionViewDataSource
         let cell = collectionView.dequeueReusableCell(withReuseIdentifier: "productListCell", for: indexPath) as! ProductListCell
         let product = filteredProducts[indexPath.row]
         
-        let formattedTotal = self.viewModel.formatCurrency(value: product.fiyat!)
+        let fiyat = ProductCellFormatter.shared.formatCurrency(value: product.fiyat!)
         
         cell.product = product
         cell.productCellProtocol = self
-        cell.productPriceLabel.text = formattedTotal
+        cell.productPriceLabel.text = fiyat
         cell.productTitleLabel.text = product.ad
         cell.productBrandLabel.text = product.marka
-        viewModel.fetchImage(imageUrl: "http://kasimadalan.pe.hu/urunler/resimler/", imageName: product.resim!, imageView: cell.productImageView)
+        ProductCellFormatter.shared.fetchImage(imageUrl: Constants.shared.imagePathURL, imageName: product.resim!, imageView: cell.productImageView)
+        
+        viewModel.checkIfFavorite(productId: product.id!) { isFavorite in
+            DispatchQueue.main.async{
+                cell.configureCell(isFavorite: isFavorite)
+            }
+        }
         
         return cell
     }

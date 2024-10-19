@@ -23,7 +23,18 @@ class BrowsePage: UIViewController {
             }
         })
         
+        let tapGesture = UITapGestureRecognizer(target: self, action: #selector(dismissKeyboard))
+        // Gesture recognizer sadece tableView dışında çalışacak şekilde ayarlanacak
+        tapGesture.cancelsTouchesInView = false
+        view.addGestureRecognizer(tapGesture)
+        
     }
+    
+    @objc func dismissKeyboard() {
+        // Klavyeyi kapat
+        view.endEditing(true)
+    }
+    
     override func viewDidLayoutSubviews() {
         if let searchTextField = browseSearchBar.value(forKey: "searchTextField") as? UITextField {
             searchTextField.frame.size.height = 76

@@ -17,13 +17,20 @@ class ProductListCell: UICollectionViewCell {
     var product:Product?
     var productCellProtocol:ProductCellProtocol?
     
+    func configureCell(isFavorite: Bool) {
+        ButtonImageConfigurator.shared.configureHeartButton(favButton, isFavorite: isFavorite)
+    }
+    
     @IBAction func addToCart(_ sender: Any) {
         if let p = product {
-            productCellProtocol?.didTapAddToCart(ad: p.ad!, resim: p.resim!, kategori: p.kategori!, fiyat: p.fiyat!, marka: p.marka!)
+            productCellProtocol?.didTapAddToCart(id:p.id!, ad: p.ad!, resim: p.resim!, kategori: p.kategori!, fiyat: p.fiyat!, marka: p.marka!)
         }
     }
     
     @IBAction func addToFav(_ sender: Any) {
-        
+        if let id = product?.id {
+            productCellProtocol?.updateFavoriteList(productId: id)
+        }
     }
+    
 }

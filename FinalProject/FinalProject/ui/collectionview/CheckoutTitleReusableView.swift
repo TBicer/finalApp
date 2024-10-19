@@ -1,10 +1,9 @@
 import UIKit
 
-class HomeReusableTitleCell: UICollectionReusableView {
+class CheckoutTitleReusableView: UICollectionReusableView {
     @IBOutlet weak var cellTitleLbl: UILabel!
     
     func setup(_ title:String){
         cellTitleLbl.text = title
     }
-    
 }
